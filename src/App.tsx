@@ -419,6 +419,7 @@ function App() {
         onTargetChange={handleTargetChange}
         onSwap={handleSwap}
         onRefresh={() => rates.refresh({ force: true })}
+        onScan={() => setScanOpen(true)}
         currencyOptions={currencyOptions}
         snapshot={snapshot}
         status={rates.status}
@@ -428,17 +429,6 @@ function App() {
         resultError={resultError}
         locale={locale}
       />
-
-      <div className="scanner-launch">
-        <button
-          type="button"
-          className="button"
-          data-testid="scan-price"
-          onClick={() => setScanOpen(true)}
-        >
-          Scan price
-        </button>
-      </div>
 
       {scanOpen ? (
         <Suspense

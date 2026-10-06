@@ -97,6 +97,22 @@
   font-size: 0.8rem;
 }
 
+.field__row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.field__row .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.field__row .button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .input,
 .select {
   width: 100%;

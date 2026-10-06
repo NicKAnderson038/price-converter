@@ -26,6 +26,7 @@ export type ConverterProps = {
   onTargetChange: (code: string) => void
   onSwap: () => void
   onRefresh: () => void
+  onScan: () => void
   currencyOptions: readonly CurrencyInfo[]
   snapshot: RateSnapshot | null
   status: RatesStatus
@@ -53,6 +54,7 @@ export function Converter({
   onTargetChange,
   onSwap,
   onRefresh,
+  onScan,
   currencyOptions,
   snapshot,
   status,
@@ -78,19 +80,30 @@ export function Converter({
         <label className="field__label" htmlFor="amount-input">
           Amount{base ? ` in ${base}` : ''}
         </label>
-        <input
-          id="amount-input"
-          data-testid="amount-input"
-          className="input"
-          type="text"
-          inputMode="decimal"
-          autoComplete="off"
-          spellCheck={false}
-          value={amountRaw}
-          onChange={(event) => onAmountChange(event.target.value)}
-          aria-invalid={amountError !== null}
-          aria-describedby={amountError ? 'amount-error' : undefined}
-        />
+        <div className="field__row">
+          <input
+            id="amount-input"
+            data-testid="amount-input"
+            className="input"
+            type="text"
+            inputMode="decimal"
+            autoComplete="off"
+            spellCheck={false}
+            value={amountRaw}
+            onChange={(event) => onAmountChange(event.target.value)}
+            aria-invalid={amountError !== null}
+            aria-describedby={amountError ? 'amount-error' : undefined}
+          />
+          <button
+            type="button"
+            className="button"
+            data-testid="scan-price"
+            onClick={onScan}
+            aria-label="Scan a price with the camera"
+          >
+            Scan price
+          </button>
+        </div>
         {amountError ? (
           <p className="field__error" id="amount-error" role="alert">
             {amountError}
