@@ -5,9 +5,18 @@ const APP_PATH = '/price-converter/'
 const APP_URL = `http://localhost:4173${APP_PATH}`
 
 /**
- * The real service worker, driven end to end. Kept separate from provider
- * route mocking: here we let the SW install and then use genuine offline
- * emulation; no `page.route` is involved in the cached-conversion assertion.
+ * The real service worker, driven end to end: the SW installs for real, the
+ * shell is served from its precache, and offline emulation is genuine, so the
+ * cached-conversion path is exercised as shipped rather than stubbed.
+ *
+ * The provider request is still explicitly aborted with `context.route` (added
+ * with the other routes at the top of each test). This does not fake the
+ * offline behavior — it pins it. A stale seeded snapshot triggers the app's
+ * automatic refresh, and if the provider is reachable that live response
+ * overwrites the seeded snapshot (it can be reachable in CI even under
+ * `setOffline`). Aborting the provider makes the offline-fallback assertion
+ * deterministic on any network, while the SW/offline mechanics remain
+ * end-to-end.
  */
 test.describe('service worker offline', () => {
   test.skip(
@@ -22,6 +31,13 @@ test.describe('service worker offline', () => {
     const page = await context.newPage()
 
     try {
+      // Abort the provider up front so the app's automatic refresh can never
+      // replace the seeded stale snapshot, even when CI can reach the network
+      // under `setOffline`. The seeded snapshot must survive the offline reload.
+      await context.route(/api\.frankfurter\.dev/, (route) =>
+        route.abort('internetdisconnected'),
+      )
+
       await page.goto(`${APP_URL}?base=EUR&target=USD&amount=100`)
 
       // Wait for the generated SW to install and activate.
