@@ -426,7 +426,7 @@ function App() {
         <div className="app__heading">
           <h1 className="app__title">Price Converter</h1>
           <p className="app__tagline">
-            Convert prices between currencies, online or with the last saved rates.
+            Works online or offline
           </p>
         </div>
         {state.view === 'settings' ? (
