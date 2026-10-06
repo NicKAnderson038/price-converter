@@ -8,6 +8,7 @@
  * router or dialog library.
  */
 
+import type { Ref } from 'react'
 import type { CurrencyInfo } from '../lib/currency.ts'
 import type { RateSnapshot } from '../lib/rates.ts'
 import type { RatesStatus } from '../hooks/useRates.ts'
@@ -28,6 +29,11 @@ export type SettingsProps = {
   currencyOptions: readonly CurrencyInfo[]
   snapshot: RateSnapshot | null
   status: RatesStatus
+  /**
+   * Focus target used by the shell when this view becomes active (change-view
+   * focus management); purely presentational, never affects the settings state.
+   */
+  headingRef?: Ref<HTMLHeadingElement>
 }
 
 function optionLabel(option: CurrencyInfo): string {
@@ -45,6 +51,7 @@ export function Settings({
   currencyOptions,
   snapshot,
   status,
+  headingRef,
 }: SettingsProps) {
   const offline = status === 'offline' || status === 'no-cache'
 
@@ -66,7 +73,7 @@ export function Settings({
 
   return (
     <section className="settings" aria-labelledby="settings-heading">
-      <h2 className="app__section-title" id="settings-heading">
+      <h2 className="app__section-title" id="settings-heading" ref={headingRef} tabIndex={-1}>
         Settings
       </h2>
 
@@ -147,8 +154,12 @@ export function Settings({
             are used, and the provider rate date is always shown.
           </p>
           <p>
-            Camera scanning (coming in a later step) runs entirely on your
-            device; images are never uploaded.
+            Camera scanning runs entirely on your device; images are never
+            uploaded.
+          </p>
+          <p>
+            Settings is a separate view: open it with the gear button in the
+            header and return with the home button.
           </p>
         </div>
       </details>

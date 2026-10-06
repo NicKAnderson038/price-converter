@@ -27,16 +27,25 @@ export type ParsedAmount =
   | { state: 'invalid'; raw: string }
   | { state: 'absent' }
 
+/**
+ * The visible view. There is deliberately no router: the view is a plain query
+ * parameter (`?view=settings`) so the static GitHub Pages build needs no
+ * server-side rewrites, and an absent or unknown value falls back to `home`.
+ */
+export type ViewName = 'home' | 'settings'
+
 export type ParsedUrlState = {
   base: ParsedCurrency
   target: ParsedCurrency
   amount: ParsedAmount
+  view: ViewName
 }
 
 export type UrlPatch = {
   base?: string | null
   target?: string | null
   amount?: string | number | null
+  view?: ViewName | null
 }
 
 function ratesHas(
@@ -92,6 +101,7 @@ export function parseUrlState(
     base: parseCurrencyParam(params.get('base'), rates),
     target: parseCurrencyParam(params.get('target'), rates),
     amount: parseAmountParam(params.get('amount')),
+    view: params.get('view') === 'settings' ? 'settings' : 'home',
   }
 }
 

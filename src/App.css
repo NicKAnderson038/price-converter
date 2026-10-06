@@ -7,7 +7,16 @@
 }
 
 .app__header {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
   text-align: left;
+}
+
+.app__heading {
+  min-width: 0;
 }
 
 .app__title {
@@ -47,6 +56,31 @@
 .button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0;
+  border: 1px solid var(--navy-line);
+  background-color: var(--navy-soft);
+  color: var(--cream);
+  border-radius: 0.5rem;
+}
+
+.icon-button svg {
+  display: block;
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+.icon-button:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
 }
 
 .suggestion {

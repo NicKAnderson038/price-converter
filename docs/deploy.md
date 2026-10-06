@@ -63,6 +63,12 @@ If you deploy to a different repository name, a user/organization site
 service-worker scope in sync. A mismatch produces a site that loads at the Pages
 URL but requests assets from the wrong path.
 
+## Client-side views (no server rewrites)
+
+The app has no router: views are selected with a query parameter (`?view=settings`)
+and the History API, so it stays GitHub Pages-safe without any server-side
+rewrite rules.
+
 ## Runtime requirement: Frankfurter API
 
 At runtime the browser calls `https://api.frankfurter.dev/v2/rates?base=USD`

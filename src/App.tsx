@@ -13,7 +13,7 @@
  * substituted.
  */
 
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { Converter } from './components/Converter.tsx'
 import { Settings } from './components/Settings.tsx'
@@ -29,6 +29,11 @@ import { parseUrlState, updateUrlSearch } from './lib/urlState.ts'
 import type { UrlPatch } from './lib/urlState.ts'
 
 type AppState = {
+  /**
+   * Which view the shell shows. This is a plain query-param view (`?view=settings`)
+   * with no router dependency, so the GitHub Pages build needs no rewrites.
+   */
+  view: 'home' | 'settings'
   /** Current visit base; null means the URL code was invalid and needs a pick. */
   base: string | null
   target: string | null
@@ -125,6 +130,7 @@ function resolveInitialSelection(
         : 'USD')
 
   return {
+    view: parsed.view,
     base,
     target,
     invalidBase,
@@ -162,6 +168,10 @@ function App() {
     resolveInitialSelection(readSearch(), rates.snapshot?.rates ?? null),
   )
   const [scanOpen, setScanOpen] = useState(false)
+  // Focus targets for change-view accessibility: the Settings heading and the
+  // converter region (the header h1 stays put above both views).
+  const settingsHeadingRef = useRef<HTMLHeadingElement>(null)
+  const converterRef = useRef<HTMLDivElement>(null)
 
   const locale = typeof navigator === 'undefined' ? 'en-US' : navigator.language
 
@@ -228,6 +238,26 @@ function App() {
       window.history.replaceState(null, '', nextUrl)
     } catch {
       // URL sync is a convenience; never break the conversion over it.
+    }
+  }
+
+  /**
+   * Switch views and mirror the choice in the URL. Unlike converter param
+   * changes (`applyUrl`, replaceState), view changes push a history entry so the
+   * browser Back button returns to the previous view. Going home removes the
+   * `view` param rather than writing `view=home`.
+   */
+  function navigateToView(view: 'home' | 'settings') {
+    setState((prev) => ({ ...prev, view }))
+    if (typeof window === 'undefined') return
+    try {
+      const nextSearch = updateUrlSearch(window.location.search, {
+        view: view === 'settings' ? 'settings' : null,
+      })
+      const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`
+      window.history.pushState(null, '', nextUrl)
+    } catch {
+      // View navigation is a convenience; never break rendering over it.
     }
   }
 
@@ -353,13 +383,14 @@ function App() {
     persistPreferences(fallbackPrimary, nextTarget)
   }
 
-  // Back/forward re-reads the URL for the converter selection only; saved
-  // preferences are unaffected.
+  // Back/forward re-reads the URL for the view and the converter selection;
+  // saved preferences are unaffected.
   useEffect(() => {
     const onPopState = () => {
       const next = resolveInitialSelection(readSearch(), ratesByCode)
       setState((prev) => ({
         ...prev,
+        view: next.view,
         base: next.base,
         target: next.target,
         invalidBase: next.invalidBase,
@@ -371,93 +402,162 @@ function App() {
     return () => window.removeEventListener('popstate', onPopState)
   }, [ratesByCode])
 
+  // Change-view accessibility: keep the document title in sync and move focus
+  // to the newly shown view's heading/region. The first render is skipped so a
+  // direct page load never steals focus from the browser chrome.
+  const firstViewRender = useRef(true)
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.title =
+        state.view === 'settings' ? 'Settings · Price Converter' : 'Price Converter'
+    }
+    if (firstViewRender.current) {
+      firstViewRender.current = false
+      return
+    }
+    const target =
+      state.view === 'settings' ? settingsHeadingRef.current : converterRef.current
+    target?.focus()
+  }, [state.view])
+
   return (
     <main className="app">
       <header className="app__header">
-        <h1 className="app__title">Price Converter</h1>
-        <p className="app__tagline">
-          Convert prices between currencies, online or with the last saved rates.
-        </p>
+        <div className="app__heading">
+          <h1 className="app__title">Price Converter</h1>
+          <p className="app__tagline">
+            Convert prices between currencies, online or with the last saved rates.
+          </p>
+        </div>
+        {state.view === 'settings' ? (
+          <button
+            type="button"
+            className="icon-button"
+            data-testid="go-home"
+            aria-label="Back to converter"
+            onClick={() => navigateToView('home')}
+          >
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 10.5 12 3l9 7.5V21a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z" />
+            </svg>
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="icon-button"
+            data-testid="open-settings"
+            aria-label="Open settings"
+            onClick={() => navigateToView('settings')}
+          >
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
+        )}
       </header>
 
-      {state.showSuggestion && state.suggested ? (
-        <div className="suggestion" role="status">
-          <p>
-            It looks like you use <strong>{state.suggested}</strong>. Use it as your
-            primary currency?
-          </p>
-          <div className="suggestion__actions">
-            <button
-              type="button"
-              className="button button--primary"
-              data-testid="confirm-suggestion"
-              onClick={handleConfirmSuggestion}
-            >
-              Yes, use {state.suggested}
-            </button>
-            <button
-              type="button"
-              className="button"
-              data-testid="dismiss-suggestion"
-              onClick={handleDismissSuggestion}
-            >
-              Not now
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      <Converter
-        base={state.base}
-        target={state.target}
-        invalidBase={state.invalidBase}
-        invalidTarget={state.invalidTarget}
-        amountRaw={state.amountRaw}
-        amountError={amountError}
-        onAmountChange={handleAmountChange}
-        onBaseChange={handleBaseChange}
-        onTargetChange={handleTargetChange}
-        onSwap={handleSwap}
-        onRefresh={() => rates.refresh({ force: true })}
-        onScan={() => setScanOpen(true)}
-        currencyOptions={currencyOptions}
-        snapshot={snapshot}
-        status={rates.status}
-        lastError={rates.lastError}
-        resultValue={conversion?.value ?? null}
-        resultFormatted={conversion?.formatted ?? null}
-        resultError={resultError}
-        locale={locale}
-      />
-
-      {scanOpen ? (
-        <Suspense
-          fallback={
-            <div className="scan-loading" role="status" data-testid="scanner-loading">
-              Loading scanner…
+      {state.view === 'settings' ? (
+        <Settings
+          headingRef={settingsHeadingRef}
+          primary={state.settingsPrimary}
+          target={state.settingsTarget}
+          primaryConfirmed={state.primaryConfirmed}
+          currentBase={state.base}
+          onChangePrimary={handlePrimaryChange}
+          onChangeTarget={handleSettingsTargetChange}
+          onSetPrimary={handleSetPrimary}
+          currencyOptions={currencyOptions}
+          snapshot={snapshot}
+          status={rates.status}
+        />
+      ) : (
+        <>
+          {state.showSuggestion && state.suggested ? (
+            <div className="suggestion" role="status">
+              <p>
+                It looks like you use <strong>{state.suggested}</strong>. Use it as your
+                primary currency?
+              </p>
+              <div className="suggestion__actions">
+                <button
+                  type="button"
+                  className="button button--primary"
+                  data-testid="confirm-suggestion"
+                  onClick={handleConfirmSuggestion}
+                >
+                  Yes, use {state.suggested}
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  data-testid="dismiss-suggestion"
+                  onClick={handleDismissSuggestion}
+                >
+                  Not now
+                </button>
+              </div>
             </div>
-          }
-        >
-          <ScanPanel
-            open={scanOpen}
-            onConfirm={handleScanConfirm}
-            onClose={() => setScanOpen(false)}
-          />
-        </Suspense>
-      ) : null}
+          ) : null}
 
-      <Settings
-        primary={state.settingsPrimary}
-        target={state.settingsTarget}
-        primaryConfirmed={state.primaryConfirmed}
-        currentBase={state.base}
-        onChangePrimary={handlePrimaryChange}
-        onChangeTarget={handleSettingsTargetChange}
-        onSetPrimary={handleSetPrimary}
-        currencyOptions={currencyOptions}
-        snapshot={snapshot}
-        status={rates.status}
-      />
+          <div className="app__converter" ref={converterRef} tabIndex={-1}>
+            <Converter
+              base={state.base}
+              target={state.target}
+              invalidBase={state.invalidBase}
+              invalidTarget={state.invalidTarget}
+              amountRaw={state.amountRaw}
+              amountError={amountError}
+              onAmountChange={handleAmountChange}
+              onBaseChange={handleBaseChange}
+              onTargetChange={handleTargetChange}
+              onSwap={handleSwap}
+              onRefresh={() => rates.refresh({ force: true })}
+              onScan={() => setScanOpen(true)}
+              currencyOptions={currencyOptions}
+              snapshot={snapshot}
+              status={rates.status}
+              lastError={rates.lastError}
+              resultValue={conversion?.value ?? null}
+              resultFormatted={conversion?.formatted ?? null}
+              resultError={resultError}
+              locale={locale}
+            />
+          </div>
+
+          {scanOpen ? (
+            <Suspense
+              fallback={
+                <div className="scan-loading" role="status" data-testid="scanner-loading">
+                  Loading scanner…
+                </div>
+              }
+            >
+              <ScanPanel
+                open={scanOpen}
+                onConfirm={handleScanConfirm}
+                onClose={() => setScanOpen(false)}
+              />
+            </Suspense>
+          ) : null}
+        </>
+      )}
     </main>
   )
 }
