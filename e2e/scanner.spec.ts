@@ -50,6 +50,64 @@ test.describe('scanner camera denial + manual entry', () => {
   })
 })
 
+test.describe('scanner reads a controlled video source', () => {
+  test.beforeEach(async ({ page }) => {
+    // Replace the camera with a canvas stream drawing a large, high-contrast
+    // price so a candidate can form without a real device. `captureStream`
+    // produces a genuine MediaStream video track, so the scanner's start() and
+    // waitForMetadata() paths run unmodified.
+    await page.addInitScript(() => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 1920
+      canvas.height = 1080
+      const ctx = canvas.getContext('2d')
+      const draw = (): void => {
+        if (!ctx) return
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.fillStyle = '#000000'
+        ctx.font = 'bold 200px sans-serif'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText('12.50', canvas.width / 2, canvas.height / 2)
+        requestAnimationFrame(draw)
+      }
+      draw()
+
+      const stream = canvas.captureStream(30)
+      const getUserMedia = (): Promise<MediaStream> => Promise.resolve(stream)
+      const mediaDevices = navigator.mediaDevices
+      if (mediaDevices) {
+        Object.defineProperty(mediaDevices, 'getUserMedia', {
+          configurable: true,
+          value: getUserMedia,
+        })
+      } else {
+        Object.defineProperty(navigator, 'mediaDevices', {
+          configurable: true,
+          value: { getUserMedia },
+        })
+      }
+    })
+  })
+
+  // No exact OCR string is asserted: recognition can vary slightly by host and
+  // build. The contract under test is that a live (canvas) video source reaches
+  // the OCR pipeline and a stable candidate is surfaced.
+  test('a canvas video source yields a stable detected candidate', async ({ page }) => {
+    test.setTimeout(60_000)
+    await page.goto(APP)
+    await page.getByTestId('scan-price').click()
+    await expect(page.getByTestId('scanner-panel')).toBeVisible()
+
+    await page.getByRole('button', { name: 'Start camera' }).click()
+
+    const confirm = page.getByTestId('scanner-confirm')
+    await expect(confirm).toBeEnabled({ timeout: 45_000 })
+    await expect(page.getByTestId('scanner-candidate')).not.toHaveText('—')
+  })
+})
+
 test.describe('price-label fixture', () => {
   test('the saved price-label image is a valid PNG', () => {
     // `npm run test:e2e` runs from the package root.

@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createScanner } from '../lib/scanner.ts'
 import type { ScanCandidate, ScannerHandle, ScannerStatus } from '../lib/scanner.ts'
+import type { Region } from '../lib/cropRegion.ts'
 
 export type ScannerFailure = {
   code: string
@@ -64,8 +65,10 @@ export type UseScannerResult = {
   cameraBlocked: boolean
   /** Acquire the camera and start OCR; resolves true once the scanner is ready. */
   start: (video: HTMLVideoElement) => Promise<boolean>
+  /** Warm the OCR worker (no camera) so the first scan skips download/compile. */
+  warmUp: () => void
   /** One recognition pass; never queues (returns null while busy). */
-  scanOnce: () => Promise<ScanCandidate | null>
+  scanOnce: (opts?: { region?: Region }) => Promise<ScanCandidate | null>
   /** Stop tracks + worker immediately; safe to call repeatedly. */
   stop: () => void
 }
@@ -122,21 +125,31 @@ export function useScanner({ open }: UseScannerOptions): UseScannerResult {
     return true
   }, [])
 
-  const scanOnce = useCallback(async (): Promise<ScanCandidate | null> => {
+  const warmUp = useCallback((): void => {
     const scanner = scannerRef.current
-    if (!scanner) return null
-    setStatus((prev) => (prev === 'ready' ? 'scanning' : prev))
-    try {
-      return await scanner.scanOnce()
-    } catch {
-      // A concurrent call losing the race is expected; the loop retries.
-      return null
-    } finally {
-      if (scannerRef.current === scanner) {
-        setStatus((prev) => (prev === 'scanning' ? 'ready' : prev))
-      }
-    }
+    if (!scanner) return
+    // Non-blocking: warm-up failures are surfaced through onError, not thrown.
+    void scanner.warmUp()
   }, [])
+
+  const scanOnce = useCallback(
+    async (opts?: { region?: Region }): Promise<ScanCandidate | null> => {
+      const scanner = scannerRef.current
+      if (!scanner) return null
+      setStatus((prev) => (prev === 'ready' ? 'scanning' : prev))
+      try {
+        return await scanner.scanOnce(opts)
+      } catch {
+        // A concurrent call losing the race is expected; the loop retries.
+        return null
+      } finally {
+        if (scannerRef.current === scanner) {
+          setStatus((prev) => (prev === 'scanning' ? 'ready' : prev))
+        }
+      }
+    },
+    [],
+  )
 
   const stop = useCallback(() => {
     const scanner = scannerRef.current
@@ -151,6 +164,7 @@ export function useScanner({ open }: UseScannerOptions): UseScannerResult {
     failure,
     cameraBlocked: failure !== null && CAMERA_BLOCKING.has(failure.code),
     start,
+    warmUp,
     scanOnce,
     stop,
   }

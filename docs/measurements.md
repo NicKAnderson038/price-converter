@@ -120,9 +120,11 @@ an in-memory `Map` fallback when persistent storage is unavailable. Typical loca
 - localStorage and Cache Storage draw on the same origin storage quota. Chrome grants a large
   fraction of free disk; iOS Safari is far more constrained and applies aggressive eviction
   (e.g. roughly 7 days of site inactivity under ITP) and may clear cache entries without warning.
-- The app does **not** call `navigator.storage.persist()` (no `navigator.storage` usage in `src/`),
-  so the ~9.4 MiB OCR cache and shell are best-effort and evictable. Once evicted, the next scan
-  re-downloads the ~9.4 MiB while online; offline scanning fails until then.
+- The app calls `navigator.storage.persist()` (T14): `ScanPanel` fires it best-effort,
+  non-blocking (the promise result is ignored) right after the first successful camera start, i.e.
+  inside the existing user gesture. Persistence is only a hint the browser may deny, so the
+  ~9.4 MiB OCR cache and shell remain evictable. Once evicted, the next scan re-downloads the
+  ~9.4 MiB while online; offline scanning fails until then.
 - `maxEntries: 12` exactly covers the current 8 OCR files. If more language files are added later,
   LRU eviction under this limit should be revisited.
 
@@ -135,15 +137,18 @@ measurement procedure and any range as a clearly labelled estimate.
 
 - **One recognition at a time.** `scanOnce()` sets an `inFlight` guard and rejects a concurrent
   call with `scan-busy` rather than queueing.
-- **Scan loop throttle.** `ScanPanel` uses a recursive `setTimeout` (`SCAN_INTERVAL_MS = 700` ms),
+- **Scan loop throttle.** `ScanPanel` uses a recursive `setTimeout` (`SCAN_INTERVAL_MS = 200` ms),
   scheduling the next tick only after the previous `scanOnce()` settles. There is no `setInterval`.
-  Effective loop period ≈ recognition time + 700 ms.
-- **Confirmation gate.** `CONFIRMATIONS_REQUIRED = 2`: a value must appear in two consecutive
-  frames before a candidate is emitted, so time-to-candidate ≈ 2 recognition passes + one 700 ms
-  gap.
-- **Frame input.** A centered 0.6 crop, longest side capped at 1000 px, drawn to a canvas and passed
-  directly to `worker.recognize` (never a JPEG data URL). PSM = `SINGLE_LINE`, char whitelist
-  `0123456789.,`.
+  Effective loop period ≈ recognition time + 200 ms.
+- **Confirmation gate.** A value must be observed at least `CONFIRMATIONS_REQUIRED = 2` times in a
+  rolling window of the last `WINDOW_SIZE = 3` readings before a candidate is emitted (null/unparseable
+  frames age the window rather than reset it), so time-to-candidate ≈ enough passes to reach 2
+  agreements, separated by 200 ms gaps.
+- **Frame input.** A WYSIWYG crop mapped from the on-screen guide (`computeCropRegion`, `object-fit:
+  cover`) to source-video pixels is drawn to a canvas, preprocessed (grayscale → min/max contrast
+  stretch → Otsu global threshold) and upscaled so the longest side is 600–1000 px (downscaled above
+  1000 px), then passed directly to `worker.recognize` (never a JPEG data URL). PSM = `SINGLE_LINE`,
+  char whitelist `0123456789.,`.
 - **Cold vs warm.** First scan after opening the panel also pays worker creation, core fetch and
   compile, and the ~2.95 MiB language download (≈9.4 MiB total, §3). Later scans reuse the cached,
   already-initialized worker and only pay recognition.
@@ -179,11 +184,11 @@ Fields to fill in on device (left blank on purpose — do not treat as measured)
 | --- | --- | --- |
 | Single `recognize` pass, median / p95 | _to be measured_ | _to be measured_ |
 | Time to first `Detected` candidate | _to be measured_ | _to be measured_ |
-| Effective scan-loop period (recognize + 700 ms) | _to be measured_ | _to be measured_ |
+| Effective scan-loop period (recognize + 200 ms) | _to be measured_ | _to be measured_ |
 
 **Unverified estimate (not a device result):** a single-line OCR pass on a ≤1000 px crop is
-typically in the high-hundreds of milliseconds to low seconds on midrange hardware; with the 700 ms
-gap and the 2-frame confirmation gate, a stable candidate would generally appear within a few
+typically in the high-hundreds of milliseconds to low seconds on midrange hardware; with the 200 ms
+gap and the 2-of-last-3 confirmation window, a stable candidate would generally appear within a few
 seconds of holding the label steady. Confirm or replace with the on-device numbers above before
 publishing performance claims.
 
@@ -220,9 +225,10 @@ acceptable**; revisit if old-device usage appears in telemetry.
 - Do not precache the OCR assets (the `**/ocr/**` glob is already correctly excluded). Keep the CacheFirst runtime route;
   its 8 files (or 4 after pruning) fit `maxEntries: 12`. After pruning, `maxEntries: 4` is
   sufficient and reduces worst-case growth.
-- **Call `navigator.storage.persist()`** after the first successful scan (inside the existing user
-  gesture) to reduce the chance of losing the ~9.4 MiB OCR cache to eviction, especially on iOS.
-  This is an app-code change outside this report's scope but is the highest-value storage fix.
+- **Done (T14): `navigator.storage.persist()` is called** best-effort and non-blocking (the
+  promise result is ignored) right after the first successful camera start, inside the existing
+  user gesture, to reduce the chance of losing the ~9.4 MiB OCR cache to eviction, especially on
+  iOS. The browser may still deny the request, so treat the cache as evictable.
 - **De-duplicate `manifest.webmanifest`** in the precache manifest (13 entries → 12 files).
 - **Optional:** exclude the three lazy JS chunks from precache if the goal is to minimize install
   bytes; they are only ~38.5 KiB raw / ~13 KiB brotli, so the benefit is marginal.
@@ -239,5 +245,5 @@ acceptable**; revisit if old-device usage appears in telemetry.
    - `du -sb dist` / `find dist -type f | wc -l` for the artifact-wide totals.
 4. Confirm precache composition: inspect the `precacheAndRoute([...])` array in `dist/sw.js`
    (entry count, distinct URLs, `ocr` absent) and confirm the `ocr-assets` CacheFirst route.
-5. Re-run the on-device latency procedure in §5 after any change to the crop ratio, max dimension,
-   PSM mode, core variant, or the 700 ms scan interval.
+5. Re-run the on-device latency procedure in §5 after any change to the crop guide mapping, max
+   dimension, PSM mode, core variant, or the 200 ms scan interval.

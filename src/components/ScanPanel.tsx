@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { ScannerStatus } from '../lib/scanner.ts'
 import { parseAmount } from '../lib/parseAmount.ts'
+import { computeCropRegion } from '../lib/cropRegion.ts'
 import { useScanner } from '../hooks/useScanner.ts'
 
 export interface ScanPanelProps {
@@ -25,7 +26,7 @@ export interface ScanPanelProps {
   onClose: () => void
 }
 
-const SCAN_INTERVAL_MS = 700
+const SCAN_INTERVAL_MS = 200
 
 function statusLabel(status: ScannerStatus): string {
   switch (status) {
@@ -47,9 +48,12 @@ function statusLabel(status: ScannerStatus): string {
 }
 
 export function ScanPanel({ open, onConfirm, onClose }: ScanPanelProps) {
-  const { status, candidate, failure, cameraBlocked, start, scanOnce } = useScanner({ open })
+  const { status, candidate, failure, cameraBlocked, start, scanOnce, warmUp } = useScanner({
+    open,
+  })
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const guideRef = useRef<HTMLDivElement | null>(null)
   const loopTimer = useRef<number | null>(null)
   const loopActive = useRef(false)
   const prefilledRef = useRef<number | null>(null)
@@ -71,6 +75,13 @@ export function ScanPanel({ open, onConfirm, onClose }: ScanPanelProps) {
     manualDirtyRef.current = false
   }, [open])
 
+  // Warm the OCR worker as soon as the panel opens (no camera yet) so the
+  // first recognition is not stuck waiting on the worker download/compile.
+  useEffect(() => {
+    if (!open) return
+    warmUp()
+  }, [open, warmUp])
+
   // Offer the detected value for editing without clobbering the user's typing:
   // prefill only while the field is pristine and the candidate value changes.
   useEffect(() => {
@@ -89,12 +100,26 @@ export function ScanPanel({ open, onConfirm, onClose }: ScanPanelProps) {
     }
   }, [])
 
+  // Map the on-screen guide to source-video pixels every frame so the crop
+  // follows the guide exactly (WYSIWYG), not a fixed centre of the raw frame.
+  const currentRegion = useCallback(() => {
+    const video = videoRef.current
+    const guide = guideRef.current
+    if (!video || !guide) return undefined
+    const width = video.videoWidth
+    const height = video.videoHeight
+    if (width <= 0 || height <= 0) return undefined
+    const videoRect = video.getBoundingClientRect()
+    if (videoRect.width <= 0 || videoRect.height <= 0) return undefined
+    return computeCropRegion(guide.getBoundingClientRect(), videoRect, width, height, 'cover')
+  }, [])
+
   // One recognition at a time: the next tick is scheduled only after the
   // previous promise settles (recursive setTimeout, never setInterval).
   const step = useCallback(async (): Promise<void> => {
     if (!loopActive.current) return
     try {
-      await scanOnce()
+      await scanOnce({ region: currentRegion() })
     } catch {
       // A busy race is expected and simply retried on the next tick.
     }
@@ -102,7 +127,7 @@ export function ScanPanel({ open, onConfirm, onClose }: ScanPanelProps) {
     loopTimer.current = window.setTimeout(() => {
       void step()
     }, SCAN_INTERVAL_MS)
-  }, [scanOnce])
+  }, [scanOnce, currentRegion])
 
   const startLoop = useCallback(() => {
     if (loopActive.current) return
@@ -187,7 +212,7 @@ export function ScanPanel({ open, onConfirm, onClose }: ScanPanelProps) {
 
       <div className="scan-panel__viewport">
         <video ref={videoRef} className="scan-panel__video" autoPlay playsInline muted />
-        <div className="scan-panel__crop" aria-hidden="true" />
+        <div ref={guideRef} className="scan-panel__crop" aria-hidden="true" />
         {!cameraStarted && (
           <div className="scan-panel__placeholder">
             <button
@@ -320,10 +345,10 @@ export function ScanPanel({ open, onConfirm, onClose }: ScanPanelProps) {
         }
         .scan-panel__crop {
           position: absolute;
-          top: 20%;
-          left: 20%;
-          width: 60%;
-          height: 60%;
+          top: 33%;
+          left: 10%;
+          width: 80%;
+          height: 34%;
           border: 2px solid #2BEEB4;
           border-radius: 0.5rem;
           box-shadow: 0 0 0 9999px rgba(7, 27, 60, 0.55);
