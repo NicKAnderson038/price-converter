@@ -54,7 +54,7 @@ type AppState = {
   primaryConfirmed: boolean
 }
 
-// The scanner (and its tesseract/camera code) is loaded only when the user
+// The scanner (and its OCR engine/camera code) is loaded only when the user
 // opens it; nothing here is in the initial converter path.
 const ScanPanel = lazy(() => import('./components/ScanPanel.tsx'))
 

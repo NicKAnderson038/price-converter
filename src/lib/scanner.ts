@@ -1,29 +1,33 @@
 /**
- * Lazy camera + Tesseract.js OCR scanner core (T5).
+ * Lazy camera + PP-OCR ONNX scanner core (T5, Stage 3).
  *
  * Design constraints (blueprint section 4):
- *  - `tesseract.js` is imported lazily through a dynamic `import()` inside
- *    `start()` / the first scan, never at module scope, so it stays out of the
- *    initial bundle.
- *  - One worker per scanner instance, created against the frozen `OCR_PATHS`
- *    vendored-asset contract.
+ *  - The OCR engine (`./ocr/engine.ts`) loads `onnxruntime-web/wasm` through a
+ *    *dynamic* `import()` inside its own warm-up path, never a static import, so
+ *    the runtime and its wasm glue stay out of the initial bundle. This module
+ *    never imports the OCR runtime statically.
+ *  - One `OcrEngine` per scanner instance, created lazily by `ensureEngine`
+ *    against the frozen `OCR_ASSETS` contract owned by the engine.
  *  - Exactly one recognition is in flight at a time. `scanOnce()` rejects a
  *    concurrent call instead of queueing, and the caller schedules the next
  *    scan only after the previous promise settles. No `setInterval`; the frame
  *    is drawn as a bounded canvas crop (the caller's guide region when given,
- *    otherwise a centred fallback), preprocessed, and passed directly to
- *    `worker.recognize` (never a JPEG data URL).
+ *    otherwise a centred fallback) and passed directly to `engine.recognize` as
+ *    raw `ImageData` (never a JPEG data URL). Preprocessing/binarisation is the
+ *    engine's `buildRecTensor`, not the scanner's.
  *  - Candidates are surfaced only after a value is observed at least
  *    `CONFIRMATIONS_REQUIRED` times in a rolling window of the last
  *    `WINDOW_SIZE` frames, so a user's saved amount is never silently
  *    rewritten by the scanner and a single miss cannot reset stability.
- *  - `stop()` is idempotent, stops every MediaStream track, terminates the
- *    worker, and bumps `initToken` to invalidate in-flight initialization so a
- *    worker that resolves late is discarded and terminated.
- *  - No image is ever uploaded; recognition runs locally in the worker.
+ *  - `stop()` is idempotent, stops every MediaStream track, disposes the
+ *    engine, and bumps `initToken` to invalidate in-flight initialization so an
+ *    engine that resolves late is disposed and discarded.
+ *  - No image is ever uploaded; recognition runs locally via onnxruntime-web.
  */
 
-import { OCR_PATHS } from './ocrPaths.ts'
+import { createOcrEngine } from './ocr/engine.ts'
+import type { OcrEngine } from './ocr/engine.ts'
+import type { RawImage } from './ocr/preprocess.ts'
 import { extractAmountCandidates, parseAmount } from './parseAmount.ts'
 import type { Region } from './cropRegion.ts'
 
@@ -45,7 +49,7 @@ export type ScannerStatus =
 export interface ScannerHandle {
   readonly status: ScannerStatus
   start(video: HTMLVideoElement): Promise<void>
-  /** Create/warm the OCR worker without touching the camera; never throws. */
+  /** Create/warm the OCR engine without touching the camera; never throws. */
   warmUp(): Promise<void>
   scanOnce(opts?: { region?: Region }): Promise<ScanCandidate | null>
   pause(): void
@@ -61,14 +65,6 @@ export type ScannerOptions = {
   maxDimension?: number
 }
 
-/**
- * Shipping page-segmentation mode is `PSM.SINGLE_LINE` for a tight price crop.
- * TODO(measure): compare `PSM.SINGLE_BLOCK` on representative receipt photos
- * and switch if it reads multi-line labels more reliably.
- */
-export const OCR_PSM_NOTE =
-  'PSM.SINGLE_LINE is used for tight price crops; compare PSM.SINGLE_BLOCK on receipts later.'
-
 const DEFAULT_CROP_RATIO = 0.6
 const DEFAULT_MAX_DIMENSION = 1000
 /** Smallest longest side a crop is upscaled to before OCR. */
@@ -82,21 +78,6 @@ const RAW_TOKEN_PATTERN =
   /(?:[^\d\s]{1,4}[\s\u00A0\u2009\u202F]*)?\d(?:[\d.,\s\u00A0\u2009\u202F]*\d)?/g
 
 type Reading = { value: number | null; raw: string }
-
-type OcrWorker = {
-  setParameters(params: Record<string, string>): Promise<unknown>
-  recognize(image: HTMLCanvasElement): Promise<{ data: { text: string } }>
-  terminate(): Promise<unknown>
-}
-
-type TesseractLike = {
-  createWorker(
-    langs: string,
-    oem: number,
-    options: { workerPath: string; corePath: string; langPath: string },
-  ): Promise<OcrWorker>
-  PSM: { SINGLE_LINE: string; SINGLE_BLOCK: string }
-}
 
 function clamp(value: number, min: number, max: number): number {
   if (Number.isNaN(value)) return min
@@ -134,110 +115,6 @@ function classifyCameraError(err: unknown): string {
   return 'permission'
 }
 
-function resolveTesseract(mod: unknown): TesseractLike {
-  const candidate = mod as { default?: TesseractLike } & Partial<TesseractLike>
-  if (typeof candidate.createWorker === 'function') {
-    return candidate as TesseractLike
-  }
-  if (candidate.default && typeof candidate.default.createWorker === 'function') {
-    return candidate.default
-  }
-  throw new Error('tesseract.js did not expose createWorker')
-}
-
-async function safeTerminate(worker: OcrWorker): Promise<void> {
-  try {
-    await worker.terminate()
-  } catch {
-    // Termination is best-effort; a worker that never started may throw.
-  }
-}
-
-/** Otsu's method: the threshold that maximises between-class variance. */
-function otsuThreshold(gray: Uint8ClampedArray): number {
-  const histogram = new Array<number>(256).fill(0)
-  for (let i = 0; i < gray.length; i += 1) histogram[gray[i]] += 1
-  const total = gray.length
-  let sum = 0
-  for (let i = 0; i < 256; i += 1) sum += i * histogram[i]
-
-  let sumBackground = 0
-  let weightBackground = 0
-  let maxVariance = 0
-  let threshold = 127
-  for (let t = 0; t < 256; t += 1) {
-    weightBackground += histogram[t]
-    if (weightBackground === 0) continue
-    const weightForeground = total - weightBackground
-    if (weightForeground === 0) break
-    sumBackground += t * histogram[t]
-    const meanBackground = sumBackground / weightBackground
-    const meanForeground = (sum - sumBackground) / weightForeground
-    const diff = meanBackground - meanForeground
-    const variance = weightBackground * weightForeground * diff * diff
-    if (variance > maxVariance) {
-      maxVariance = variance
-      threshold = t
-    }
-  }
-  return threshold
-}
-
-/**
- * Grayscale → min/max contrast stretch → Otsu global threshold, in place.
- * If thresholding would leave almost one colour (a blank, blown-out, or
- * uniformly dark frame), keep the stretched grayscale instead so the worker is
- * not fed a meaningless all-black/all-white image.
- */
-function preprocess(ctx: CanvasRenderingContext2D, width: number, height: number): void {
-  let image: ImageData
-  try {
-    image = ctx.getImageData(0, 0, width, height)
-  } catch {
-    // Reading the frame back can fail on a tainted/zero-sized canvas; OCR can
-    // still run on the unprocessed draw.
-    return
-  }
-
-  const data = image.data
-  const pixels = width * height
-  if (pixels === 0) return
-
-  const gray = new Uint8ClampedArray(pixels)
-  let min = 255
-  let max = 0
-  for (let p = 0, i = 0; p < pixels; p += 1, i += 4) {
-    const value = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0
-    gray[p] = value
-    if (value < min) min = value
-    if (value > max) max = value
-  }
-
-  const range = max - min
-  if (range > 0) {
-    for (let p = 0; p < pixels; p += 1) {
-      gray[p] = Math.round(((gray[p] - min) * 255) / range)
-    }
-  }
-
-  const threshold = otsuThreshold(gray)
-  let dark = 0
-  for (let p = 0; p < pixels; p += 1) {
-    if (gray[p] <= threshold) dark += 1
-  }
-  const dominant = Math.max(dark, pixels - dark) / pixels
-  const binarise = dominant <= 0.98
-
-  for (let p = 0, i = 0; p < pixels; p += 1, i += 4) {
-    const value = binarise ? (gray[p] > threshold ? 255 : 0) : gray[p]
-    data[i] = value
-    data[i + 1] = value
-    data[i + 2] = value
-    data[i + 3] = 255
-  }
-  ctx.putImageData(image, 0, 0)
-}
-
 export function createScanner(opts?: ScannerOptions): ScannerHandle {
   const cropRatio = clamp(opts?.cropRatio ?? DEFAULT_CROP_RATIO, 0.1, 1)
   const maxDimension = Math.max(
@@ -250,8 +127,8 @@ export function createScanner(opts?: ScannerOptions): ScannerHandle {
   let paused = false
   let video: HTMLVideoElement | null = null
   let stream: MediaStream | null = null
-  let worker: OcrWorker | null = null
-  let initTask: Promise<OcrWorker | null> | null = null
+  let engine: OcrEngine | null = null
+  let initTask: Promise<OcrEngine | null> | null = null
   let initToken = 0
   let inFlight = false
   let canvas: HTMLCanvasElement | null = null
@@ -328,11 +205,16 @@ export function createScanner(opts?: ScannerOptions): ScannerHandle {
     })
   }
 
-  async function initWorker(token: number): Promise<OcrWorker | null> {
-    let tesseract: TesseractLike
+  /**
+   * Create the engine and complete its warm-up (dynamic ort import + model and
+   * dictionary load). Mirrors the old worker-init safety: a single in-flight
+   * attempt, and any engine that finishes after `stop()`/`initToken` changed is
+   * disposed and discarded.
+   */
+  async function initEngine(token: number): Promise<OcrEngine | null> {
+    let created: OcrEngine
     try {
-      const mod = await import('tesseract.js')
-      tesseract = resolveTesseract(mod)
+      created = createOcrEngine()
     } catch (err) {
       if (!stopped && token === initToken) {
         setStatus('error')
@@ -341,56 +223,31 @@ export function createScanner(opts?: ScannerOptions): ScannerHandle {
       return null
     }
 
-    if (stopped || token !== initToken) return null
-
-    let created: OcrWorker
     try {
-      created = await tesseract.createWorker('eng', 1, {
-        workerPath: OCR_PATHS.workerPath,
-        corePath: OCR_PATHS.corePath,
-        langPath: OCR_PATHS.langPath,
-      })
+      await created.warmUp()
     } catch (err) {
       if (!stopped && token === initToken) {
         setStatus('error')
         emitError('worker-init', err)
       }
+      await created.dispose()
       return null
     }
 
-    // stop() may have run while createWorker was resolving: discard the worker.
+    // stop() may have run while warm-up was resolving: discard the engine.
     if (stopped || token !== initToken) {
-      await safeTerminate(created)
+      await created.dispose()
       return null
     }
 
-    try {
-      await created.setParameters({
-        tessedit_pageseg_mode: tesseract.PSM.SINGLE_LINE,
-        tessedit_char_whitelist: '0123456789.,',
-        classify_bln_numeric_mode: '1',
-        load_system_dawg: '0',
-        load_freq_dawg: '0',
-      })
-    } catch (err) {
-      if (!stopped && token === initToken) emitError('worker-init', err)
-    }
-
-    // Re-check after the second await before publishing the worker.
-    if (stopped || token !== initToken) {
-      await safeTerminate(created)
-      return null
-    }
-
-    worker = created
+    engine = created
     return created
   }
 
-  function ensureWorker(): Promise<OcrWorker | null> {
-    if (worker) return Promise.resolve(worker)
+  function ensureEngine(token: number): Promise<OcrEngine | null> {
+    if (engine) return Promise.resolve(engine)
     if (initTask) return initTask
-    const token = initToken
-    const task = initWorker(token)
+    const task = initEngine(token)
     initTask = task
     const clear = (): void => {
       if (initTask === task) initTask = null
@@ -400,19 +257,24 @@ export function createScanner(opts?: ScannerOptions): ScannerHandle {
   }
 
   /**
-   * Kick off worker creation (download/compile/WASM warm-up) without opening
-   * the camera. Best-effort: never rejects, even when tesseract.js or the
-   * worker assets are unavailable.
+   * Kick off engine creation (dynamic runtime import + model/dict load) without
+   * opening the camera. Best-effort: never rejects, even when onnxruntime-web
+   * or the OCR assets are unavailable.
    */
   function warmUp(): Promise<void> {
     if (stopped) return Promise.resolve()
-    return ensureWorker().then(
+    return ensureEngine(initToken).then(
       () => undefined,
       () => undefined,
     )
   }
 
-  function drawCrop(el: HTMLVideoElement, region: Region | null): HTMLCanvasElement | null {
+  /**
+   * Draw the guide region (or the centred `cropRatio` fallback) to a reused
+   * canvas, cap the longest side at `maxDimension`, and return the raw pixels.
+   * No binarisation happens here; `buildRecTensor` in the engine owns it.
+   */
+  function drawCrop(el: HTMLVideoElement, region: Region | null): RawImage | null {
     const frameWidth = el.videoWidth
     const frameHeight = el.videoHeight
     if (frameWidth <= 0 || frameHeight <= 0) return null
@@ -466,11 +328,13 @@ export function createScanner(opts?: ScannerOptions): ScannerHandle {
         targetWidth,
         targetHeight,
       )
+      const image = ctx.getImageData(0, 0, targetWidth, targetHeight)
+      return { data: image.data, width: image.width, height: image.height }
     } catch {
+      // Reading the frame back can fail on a tainted/zero-sized canvas; a
+      // frame that cannot be read is skipped rather than sent to the engine.
       return null
     }
-    preprocess(ctx, targetWidth, targetHeight)
-    return canvas
   }
 
   function findRaw(text: string, value: number): string {
@@ -611,7 +475,7 @@ export function createScanner(opts?: ScannerOptions): ScannerHandle {
 
     wireVisibility()
 
-    const ready = await ensureWorker()
+    const ready = await ensureEngine(initToken)
     if (stopped) return
     if (!ready) {
       setStatus('error')
@@ -632,10 +496,10 @@ export function createScanner(opts?: ScannerOptions): ScannerHandle {
     const token = initToken
 
     try {
-      let activeWorker = worker
-      if (!activeWorker) {
-        activeWorker = await ensureWorker()
-        if (!activeWorker) return null
+      let activeEngine = engine
+      if (!activeEngine) {
+        activeEngine = await ensureEngine(token)
+        if (!activeEngine) return null
       }
 
       const el = video
@@ -648,8 +512,8 @@ export function createScanner(opts?: ScannerOptions): ScannerHandle {
 
       let text = ''
       try {
-        const result = await activeWorker.recognize(frame)
-        text = result?.data?.text ?? ''
+        const result = await activeEngine.recognize(frame)
+        text = result?.text ?? ''
       } catch (err) {
         if (!stopped && token === initToken) {
           setStatus('error')
@@ -680,7 +544,7 @@ export function createScanner(opts?: ScannerOptions): ScannerHandle {
     if (stopped) return
     stopped = true
     status = 'stopped'
-    // Invalidate in-flight worker creation and recognition.
+    // Invalidate in-flight engine creation and recognition.
     initToken += 1
     paused = false
     inFlight = false
@@ -688,8 +552,8 @@ export function createScanner(opts?: ScannerOptions): ScannerHandle {
 
     unwireVisibility()
 
-    const activeWorker = worker
-    worker = null
+    const activeEngine = engine
+    engine = null
     initTask = null
 
     const el = video
@@ -707,7 +571,7 @@ export function createScanner(opts?: ScannerOptions): ScannerHandle {
     video = null
     canvas = null
 
-    if (activeWorker) await safeTerminate(activeWorker)
+    if (activeEngine) await activeEngine.dispose()
   }
 
   return {

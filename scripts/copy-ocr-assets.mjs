@@ -1,67 +1,100 @@
 #!/usr/bin/env node
 /**
- * Copy the deterministic offline OCR assets from node_modules into public/ocr/.
+ * Copy the deterministic offline OCR assets into public/ocr/.
  *
- * Idempotent (copies overwrite) and fails loudly if any source is missing.
- * Run via `npm run assets:ocr`; the T5 scanner consumes the layout through
- * src/lib/ocrPaths.ts.
+ * Idempotent (copies overwrite and stale paths are removed) and fails loudly if
+ * any source is missing or if a vendored source's sha256 does not match the
+ * pinned provenance hash. Run via `npm run assets:ocr`; the Stage 3 scanner
+ * consumes the layout through src/lib/ocr/assets.ts.
  *
- * Layout:
- *   public/ocr/worker.min.js
- *   public/ocr/core/tesseract-core-{lstm,simd-lstm,relaxedsimd-lstm}.wasm.js
- *   public/ocr/core/tesseract-core-{lstm,simd-lstm,relaxedsimd-lstm}.wasm
- *   public/ocr/lang/eng.traineddata.gz
+ * Sources:
+ *   node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs
+ *   node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm
+ *   vendor/ocr/ch_PP-OCRv3_rec_infer.onnx
+ *   vendor/ocr/ppocr_keys_v1.txt
  *
- * tesseract.js selects `tesseract-core[-simd|-relaxedsimd]-lstm.wasm.js` when
- * corePath is a directory (node_modules/tesseract.js/src/worker-script/browser/getCore.js),
- * so all three LSTM-only glue variants and their binaries must be present.
+ * Layout produced:
+ *   public/ocr/ort/ort-wasm-simd-threaded.mjs
+ *   public/ocr/ort/ort-wasm-simd-threaded.wasm
+ *   public/ocr/models/ch_PP-OCRv3_rec_infer.onnx
+ *   public/ocr/dict/ppocr_keys_v1.txt
  */
-import { copyFile, mkdir, stat } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { copyFile, mkdir, readFile, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '..')
 const nodeModules = path.join(projectRoot, 'node_modules')
+const vendorDir = path.join(projectRoot, 'vendor', 'ocr')
 const ocrDir = path.join(projectRoot, 'public', 'ocr')
-const coreSrcDir = path.join(nodeModules, 'tesseract.js-core')
 
-const LSTM_CORE_VARIANTS = ['lstm', 'simd-lstm', 'relaxedsimd-lstm']
+const ortDist = path.join(nodeModules, 'onnxruntime-web', 'dist')
+
+// Provenance: the vendored model/dict are redistributed byte-for-byte, so pin
+// their hashes and fail loudly if a source is swapped or corrupted.
+const REC_MODEL_SHA256 =
+  '897a3ededb38fee0dae2c1ccee38241f37df202c9509e3abca02e9217c5ee615'
+const DICT_SHA256 =
+  '28b2362ad4ab2dc38769aa72feb535e3a9ddb3fd2a7585a05920e6393b1dc7f7'
 
 const copies = [
   {
-    from: path.join(nodeModules, 'tesseract.js', 'dist', 'worker.min.js'),
-    to: path.join(ocrDir, 'worker.min.js'),
+    from: path.join(ortDist, 'ort-wasm-simd-threaded.mjs'),
+    to: path.join(ocrDir, 'ort', 'ort-wasm-simd-threaded.mjs'),
   },
-  ...LSTM_CORE_VARIANTS.flatMap((variant) => {
-    const base = `tesseract-core-${variant}`
-    return [
-      {
-        from: path.join(coreSrcDir, `${base}.wasm.js`),
-        to: path.join(ocrDir, 'core', `${base}.wasm.js`),
-      },
-      {
-        from: path.join(coreSrcDir, `${base}.wasm`),
-        to: path.join(ocrDir, 'core', `${base}.wasm`),
-      },
-    ]
-  }),
   {
-    from: path.join(
-      nodeModules,
-      '@tesseract.js-data',
-      'eng',
-      '4.0.0_best_int',
-      'eng.traineddata.gz',
-    ),
-    to: path.join(ocrDir, 'lang', 'eng.traineddata.gz'),
+    from: path.join(ortDist, 'ort-wasm-simd-threaded.wasm'),
+    to: path.join(ocrDir, 'ort', 'ort-wasm-simd-threaded.wasm'),
+  },
+  {
+    from: path.join(vendorDir, 'ch_PP-OCRv3_rec_infer.onnx'),
+    to: path.join(ocrDir, 'models', 'ch_PP-OCRv3_rec_infer.onnx'),
+    sha256: REC_MODEL_SHA256,
+  },
+  {
+    from: path.join(vendorDir, 'ppocr_keys_v1.txt'),
+    to: path.join(ocrDir, 'dict', 'ppocr_keys_v1.txt'),
+    sha256: DICT_SHA256,
   },
 ]
 
+/**
+ * Tesseract-era runtime paths (Stage 3 replaced tesseract.js). Remove them if a
+ * dirty working tree left them behind, so they can never ship in `dist/`.
+ */
+const stalePaths = [
+  path.join(ocrDir, 'worker.min.js'),
+  path.join(ocrDir, 'core'),
+  path.join(ocrDir, 'lang'),
+]
+
+async function sha256(filePath) {
+  const bytes = await readFile(filePath)
+  return createHash('sha256').update(bytes).digest('hex')
+}
+
+async function removeStale() {
+  for (const stale of stalePaths) {
+    try {
+      await stat(stale)
+    } catch {
+      continue // Absent: nothing to clean up (keeps the script idempotent).
+    }
+    await rm(stale, { recursive: true, force: true })
+    console.log(
+      `Removed stale tesseract-era path: ${path.relative(projectRoot, stale)}`,
+    )
+  }
+}
+
 async function main() {
+  await removeStale()
+
   let total = 0
 
-  for (const { from, to } of copies) {
+  for (const { from, to, sha256: expectedHash } of copies) {
     let source
     try {
       source = await stat(from)
@@ -70,6 +103,15 @@ async function main() {
     }
     if (!source.isFile()) {
       throw new Error(`OCR source is not a file: ${path.relative(projectRoot, from)}`)
+    }
+
+    if (expectedHash) {
+      const actualHash = await sha256(from)
+      if (actualHash !== expectedHash) {
+        throw new Error(
+          `sha256 mismatch for ${path.relative(projectRoot, from)}: expected ${expectedHash}, got ${actualHash}`,
+        )
+      }
     }
 
     await mkdir(path.dirname(to), { recursive: true })

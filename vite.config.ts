@@ -12,6 +12,32 @@ const ocrUrlPattern = new RegExp(`${base}ocr/`)
 
 export default defineConfig({
   base,
+  resolve: {
+    // onnxruntime-web@1.30.0 exposes each browser entry point through a
+    // conditional `exports` map. For the `./wasm` subpath:
+    //
+    //   "import": {
+    //     "onnxruntime-web-use-extern-wasm": "./dist/ort.wasm.min.mjs",
+    //     "default": "./dist/ort.wasm.bundle.min.mjs"
+    //   }
+    //
+    // The default (`*.bundle`) references the wasm binary via
+    // `new URL('ort-wasm-simd-threaded.wasm', import.meta.url)`, which Vite
+    // resolves and emits as a duplicate ~14 MB `dist/assets/*.wasm`. The extern
+    // build loads the same-origin copy under `public/ocr/ort/` at runtime via
+    // `env.wasm.wasmPaths` and marks its glue import `/*@vite-ignore*/`, so Vite
+    // leaves it alone. Enabling the custom condition selects `ort.wasm.min.mjs`.
+    //
+    // Vite REPLACES the default client conditions when `resolve.conditions` is
+    // set, so the defaults (`module`, `browser`, `development|production`) are
+    // re-listed here to keep package resolution otherwise unchanged.
+    conditions: [
+      'module',
+      'browser',
+      'development|production',
+      'onnxruntime-web-use-extern-wasm',
+    ],
+  },
   plugins: [
     react(),
     VitePWA({

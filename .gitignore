@@ -10,6 +10,10 @@ dist-ssr
 # checkout can build without installing Playwright.
 public/ocr
 
+# Vendored OCR sources under vendor/ocr/ ARE committed: scripts/copy-ocr-assets.mjs
+# copies them into the git-ignored public/ocr/. Do not add a broad rule here that
+# would cover vendor/ocr (e.g. *.onnx); no ignore rule currently matches it.
+
 # Playwright
 test-results
 playwright-report

@@ -287,37 +287,55 @@ async function checkAssets() {
     check(`dist/icons/${file} exists`, info?.isFile() === true)
   }
 
+  // Stage 3 layout: PP-OCRv3 rec ONNX + dict + self-hosted onnxruntime-web.
   const ocrDir = path.join(distDir, 'ocr')
+
+  const recModelPath = path.join(ocrDir, 'models', 'ch_PP-OCRv3_rec_infer.onnx')
+  const recModel = await exists(recModelPath)
   check(
-    'dist/ocr/worker.min.js exists',
-    (await exists(path.join(ocrDir, 'worker.min.js')))?.isFile() === true,
+    'dist/ocr/models/ch_PP-OCRv3_rec_infer.onnx exists',
+    recModel?.isFile() === true,
+  )
+  check(
+    'dist/ocr/models/ch_PP-OCRv3_rec_infer.onnx is >= 10,000,000 B',
+    recModel?.isFile() === true && recModel.size >= 10_000_000,
+    recModel ? `got ${recModel.size} B` : 'missing',
   )
 
-  const coreFiles = [
-    'tesseract-core-lstm.wasm',
-    'tesseract-core-lstm.wasm.js',
-    'tesseract-core-simd-lstm.wasm',
-    'tesseract-core-simd-lstm.wasm.js',
-    'tesseract-core-relaxedsimd-lstm.wasm',
-    'tesseract-core-relaxedsimd-lstm.wasm.js',
-  ]
-  for (const file of coreFiles) {
-    const info = await exists(path.join(ocrDir, 'core', file))
-    check(`dist/ocr/core/${file} exists`, info?.isFile() === true)
-  }
+  check(
+    'dist/ocr/dict/ppocr_keys_v1.txt exists',
+    (await exists(path.join(ocrDir, 'dict', 'ppocr_keys_v1.txt')))?.isFile() === true,
+  )
 
-  const coreDir = path.join(ocrDir, 'core')
-  let coreCount = 0
-  try {
-    coreCount = (await readdir(coreDir)).length
-  } catch {
-    coreCount = 0
-  }
-  check('dist/ocr/core/ has exactly 6 LSTM files', coreCount === 6, `got ${coreCount}`)
+  const ortWasmPath = path.join(ocrDir, 'ort', 'ort-wasm-simd-threaded.wasm')
+  const ortWasm = await exists(ortWasmPath)
+  check(
+    'dist/ocr/ort/ort-wasm-simd-threaded.wasm exists',
+    ortWasm?.isFile() === true,
+  )
+  check(
+    'dist/ocr/ort/ort-wasm-simd-threaded.wasm is >= 10,000,000 B',
+    ortWasm?.isFile() === true && ortWasm.size >= 10_000_000,
+    ortWasm ? `got ${ortWasm.size} B` : 'missing',
+  )
 
   check(
-    'dist/ocr/lang/eng.traineddata.gz exists',
-    (await exists(path.join(ocrDir, 'lang', 'eng.traineddata.gz')))?.isFile() === true,
+    'dist/ocr/ort/ort-wasm-simd-threaded.mjs exists',
+    (await exists(path.join(ocrDir, 'ort', 'ort-wasm-simd-threaded.mjs')))?.isFile() === true,
+  )
+
+  // Tesseract-era paths must be gone entirely (Stage 3 removed tesseract.js).
+  check(
+    'dist/ocr/worker.min.js is absent (tesseract removed)',
+    (await exists(path.join(ocrDir, 'worker.min.js'))) === null,
+  )
+  check(
+    'dist/ocr/core/ is absent (tesseract removed)',
+    (await exists(path.join(ocrDir, 'core'))) === null,
+  )
+  check(
+    'dist/ocr/lang/ is absent (tesseract removed)',
+    (await exists(path.join(ocrDir, 'lang'))) === null,
   )
 }
 
@@ -422,6 +440,31 @@ async function checkPrecache(sw) {
     ocrEntries.join(', '),
   )
 
+  const binaryEntries = urls.filter((u) => /\.(?:onnx|wasm)$/i.test(u))
+  check(
+    'precache includes no .onnx/.wasm assets',
+    binaryEntries.length === 0,
+    binaryEntries.join(', '),
+  )
+
+  // Duplicate-emit guard: the onnxruntime wasm must live only under
+  // dist/ocr/ort/, never be re-emitted into the hashed assets dir.
+  const strayWasm = []
+  try {
+    for (const name of await readdir(assetsDir)) {
+      if (!name.endsWith('.wasm')) continue
+      const info = await stat(path.join(assetsDir, name))
+      if (info.size > 1_000_000) strayWasm.push(`${name} (${info.size} B)`)
+    }
+  } catch {
+    // assets/ may be absent in a partial build; checkShell() covers the shell.
+  }
+  check(
+    'no dist/assets/*.wasm larger than 1 MB (duplicate-emit guard)',
+    strayWasm.length === 0,
+    strayWasm.join(', '),
+  )
+
   const missing = []
   for (const url of urls) {
     const local = path.join(distDir, url)
@@ -435,7 +478,7 @@ async function checkPrecache(sw) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Chunk graph, role classification, tesseract placement, OCR same-origin
+// 8. Chunk graph, role classification, onnxruntime placement, OCR same-origin
 // ---------------------------------------------------------------------------
 
 function resolveAssetRef(fromFile, ref) {
@@ -522,25 +565,28 @@ async function checkChunkGraph(indexHtml) {
     `got ${graph.roles.get(entryFile)}`,
   )
 
-  // tesseract must not be in the entry / initial chunks.
-  const initialTesseract = []
-  const lazyTesseract = []
+  // The OCR engine (onnxruntime-web) must stay out of the entry / initial
+  // chunks; tesseract must be gone entirely.
+  const initialEngine = []
+  const lazyOnnx = []
   for (const [file, role] of graph.roles) {
     const content = await readUtf8(path.join(assetsDir, file))
-    if (/tesseract/i.test(content)) {
-      if (role === 'lazy') lazyTesseract.push(file)
-      else initialTesseract.push(file)
+    const bannedInInitial = /tesseract/i.test(content) || /onnxruntime/i.test(content)
+    if (role === 'lazy') {
+      if (/onnxruntime/i.test(content) || /ort-wasm/i.test(content)) lazyOnnx.push(file)
+    } else if (bannedInInitial) {
+      initialEngine.push(file)
     }
   }
   check(
-    'initial entry chunk has no tesseract reference',
-    initialTesseract.length === 0,
-    initialTesseract.join(', '),
+    'initial entry/initial chunks have no tesseract or onnxruntime reference',
+    initialEngine.length === 0,
+    initialEngine.join(', '),
   )
   check(
-    'lazy scanner chunk(s) reference tesseract',
-    lazyTesseract.length > 0,
-    'no lazy chunk mentions tesseract',
+    'lazy scanner chunk(s) reference onnxruntime/ort-wasm',
+    lazyOnnx.length > 0,
+    'no lazy chunk mentions onnxruntime or ort-wasm',
   )
 
   // The lazy scanner chunk(s) must load OCR from the same-origin base path.
@@ -551,25 +597,46 @@ async function checkChunkGraph(indexHtml) {
   for (const file of lazyChunks) {
     lazyContents.set(file, await readUtf8(path.join(assetsDir, file)))
   }
+
+  // Collect URL-like string literals that mention OCR (root-absolute, relative,
+  // or absolute). Every one must resolve under the deploy base `${BASE}ocr/`.
+  const lazyOcrRefs = []
+  for (const [file, content] of lazyContents) {
+    for (const m of content.matchAll(
+      /["'`]((?:https?:\/\/|\/|\.\.?\/)[^"'`\s]*ocr[^"'`\s]*)["'`]/gi,
+    )) {
+      lazyOcrRefs.push({ file, ref: m[1] })
+    }
+  }
   check(
     `lazy scanner chunk(s) resolve OCR under ${BASE}ocr/`,
-    [...lazyContents.values()].some((content) => content.includes(`${BASE}ocr/`)),
+    lazyOcrRefs.some(({ ref }) => ref.startsWith(`${BASE}ocr/`)),
     `no lazy chunk references ${BASE}ocr/`,
+  )
+  const badLazyOcrRefs = lazyOcrRefs.filter(
+    ({ ref }) => !ref.startsWith(`${BASE}ocr/`),
+  )
+  check(
+    `all lazy OCR asset URLs are under ${BASE}ocr/`,
+    badLazyOcrRefs.length === 0,
+    badLazyOcrRefs.map(({ file, ref }) => `${file}: ${ref}`).join(', '),
   )
 
   const crossOriginOcr = []
   for (const [file, content] of lazyContents) {
-    for (const m of content.matchAll(/https?:\/\/[^"'`\s)]*ocr[^"'`\s)]*/gi)) {
+    for (const m of content.matchAll(
+      /https?:\/\/[^"'`\s)]*(?:ocr|jsdelivr|huggingface|bcebos)[^"'`\s)]*/gi,
+    )) {
       crossOriginOcr.push(`${file}: ${m[0]}`)
     }
   }
   check(
-    'no lazy chunk references a cross-origin OCR URL',
+    'no lazy chunk references a cross-origin OCR/CDN URL',
     crossOriginOcr.length === 0,
     crossOriginOcr.join(', '),
   )
 
-  return { graph, entryFile, lazyTesseract }
+  return { graph, entryFile, lazyOnnx }
 }
 
 // ---------------------------------------------------------------------------
@@ -645,9 +712,21 @@ async function printMeasurements(graph) {
   )
   console.log(`  CSS total: raw ${css.raw}, gzip ${css.gzip}, brotli ${css.brotli}`)
 
-  const ocr = await dirBytes(path.join(distDir, 'ocr'))
-  const dist = await dirBytes(distDir)
+  const ocrRoot = path.join(distDir, 'ocr')
+  const ocr = await dirBytes(ocrRoot)
   console.log(`  dist/ocr/** total: ${fmt(ocr.total)} across ${ocr.files.length} files`)
+  for (const sub of ['ort', 'models', 'dict']) {
+    const subInfo = await exists(path.join(ocrRoot, sub))
+    if (!subInfo?.isDirectory()) {
+      console.log(`  dist/ocr/${sub}/: (absent)`)
+      continue
+    }
+    const bytes = await dirBytes(path.join(ocrRoot, sub))
+    console.log(
+      `  dist/ocr/${sub}/: ${fmt(bytes.total)} across ${bytes.files.length} files`,
+    )
+  }
+  const dist = await dirBytes(distDir)
   console.log(`  dist/** total: ${fmt(dist.total)} across ${dist.files.length} files`)
   console.log('=== END MEASUREMENTS ===')
 }

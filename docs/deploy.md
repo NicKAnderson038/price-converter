@@ -78,6 +78,36 @@ return CORS headers that allow the origin. This is a provider-side property; if
 it changes, live rate refresh fails and the app falls back to its saved
 snapshot. Verify a live fetch from the deployed origin after the first deploy.
 
+## Runtime requirement: OCR assets (self-hosted)
+
+The scanner ships a self-hosted PP-OCRv3 recognition model and the
+onnxruntime-web wasm runtime under `/price-converter/ocr/**` (`models/`,
+`dict/`, and `ort/`). These files are **not** part of the precached shell: the
+service worker serves them through a `CacheFirst` runtime route
+(`ocr-assets`) and the browser fetches them on first scanner use
+(**~24.98 MB total**: model 10.69 MB, ort wasm 14.24 MB, dict 26 KB). After one
+online visit that opens the scanner, later scans — including offline — are
+served from that cache until it is evicted.
+
+GitHub Pages cannot send COOP/COEP, so the runtime is forced single-threaded
+(`numThreads = 1`) with WASM SIMD (no cross-origin isolation needed); browsers
+without WASM SIMD fall back to manual entry. There is **no third-party OCR CDN
+at runtime** — every OCR byte is fetched from the same Pages origin, and the
+deploy artifact includes the full `ocr/` directory.
+
+## Manual real-device checklist (OCR)
+
+Emulation does not replace a phone camera. On a real Android and iPhone, verify:
+
+1. **Accuracy** — scan a few real labels/receipts (comma and dot formats) and
+   confirm the detected amount; fall back to manual editing when wrong.
+2. **Latency** — record time-to-first-candidate and warm recognition passes
+   (method in [`docs/measurements.md`](measurements.md) §5).
+3. **Cold download** — clear site data, open the scanner, and confirm the
+   ~24.98 MB OCR payload loads once over the network (remote DevTools).
+4. **Offline scan** — after one online visit that opened the scanner, go offline
+   and confirm a scan still works from cache.
+
 ## Development-only test suite
 
 The Playwright end-to-end suite (`npm run test:e2e`, `e2e/`) is a
@@ -87,7 +117,8 @@ run by the deploy workflow. Run it locally against a production build with the
 same `/price-converter/` base path before releasing; it does not deploy.
 
 Manual device checks (PWA install, offline launch, camera permission, and OCR)
-remain required and are described in the project blueprint (§7).
+remain required and are described in the project blueprint (§7) and the
+"Manual real-device checklist (OCR)" above.
 
 ## Action versions
 

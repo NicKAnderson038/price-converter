@@ -1,0 +1,29 @@
+Vendored OCR assets NOTICE
+=========================
+
+This directory redistributes model and dictionary files that originate from
+upstream projects. They are committed here (rather than fetched at build time)
+so `npm run assets:ocr` stays fully offline and deterministic.
+
+ch_PP-OCRv3_rec_infer.onnx
+--------------------------
+- Upstream distributor: RapidAI / RapidOcrOnnx
+  https://github.com/RapidAI/RapidOcrOnnx
+- Release: tag `init`, asset `models.7z`
+  https://github.com/RapidAI/RapidOcrOnnx/releases/download/init/models.7z
+- Original model: PaddleOCR PP-OCRv3 Chinese recognition model (`ch_PP-OCRv3_rec`)
+  https://github.com/PaddlePaddle/PaddleOCR
+- License: Apache License 2.0 (see LICENSE in this directory)
+- sha256: 897a3ededb38fee0dae2c1ccee38241f37df202c9509e3abca02e9217c5ee615
+
+ppocr_keys_v1.txt
+-----------------
+- Upstream: PaddleOCR (`ppocr/utils/ppocr_keys_v1.txt`), redistributed via
+  RapidAI/RapidOcrOnnx release asset `models.7z` (tag `init`).
+  https://github.com/PaddlePaddle/PaddleOCR
+- License: Apache License 2.0 (see LICENSE in this directory)
+- sha256: 28b2362ad4ab2dc38769aa72feb535e3a9ddb3fd2a7585a05920e6393b1dc7f7
+
+The RapidOcrOnnx `models.7z` archive also ships `ch_PP-OCRv3_det_infer.onnx` and
+`ch_ppocr_mobile_v2.0_cls_infer.onnx`; Stage 3 is recognition-only and does not
+vendor those.
