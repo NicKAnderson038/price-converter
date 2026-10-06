@@ -1,0 +1,19 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+dist-ssr
+
+# Generated OCR runtime assets (produced by T4: npm run assets:ocr). The icon
+# PNGs are committed instead (see scripts/generate-icons.mjs) so a clean CI
+# checkout can build without installing Playwright.
+public/ocr
+
+# Playwright
+test-results
+playwright-report
+
+# Local files
+*.local
+.DS_Store

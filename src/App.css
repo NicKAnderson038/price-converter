@@ -1,0 +1,274 @@
+.app {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+  display: grid;
+  gap: 1.25rem;
+}
+
+.app__header {
+  text-align: left;
+}
+
+.app__title {
+  margin: 0 0 0.25rem;
+  font-size: 1.75rem;
+  color: var(--cream);
+}
+
+.app__tagline {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.app__section-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+  color: var(--cream);
+}
+
+.button {
+  border: 1px solid var(--navy-line);
+  background-color: var(--navy-soft);
+  color: var(--cream);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.85rem;
+  min-height: 2.5rem;
+}
+
+.button--primary {
+  background-color: var(--mint);
+  border-color: var(--mint);
+  color: var(--navy);
+  font-weight: 600;
+}
+
+.button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.suggestion {
+  border: 1px solid var(--mint);
+  background-color: rgba(43, 238, 180, 0.1);
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.suggestion p {
+  margin: 0;
+}
+
+.suggestion__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.converter,
+.settings {
+  border: 1px solid var(--navy-line);
+  border-radius: 0.75rem;
+  background-color: var(--navy-soft);
+  padding: 1rem;
+}
+
+.converter {
+  display: grid;
+  gap: 1rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.field__label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.field__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+
+.input,
+.select {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--navy-line);
+  background-color: var(--navy);
+  color: var(--cream);
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.5rem;
+  align-items: end;
+}
+
+.swap {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--mint);
+  background-color: transparent;
+  color: var(--mint);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.swap:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.converter__invalid {
+  margin: 0;
+  color: var(--warn);
+  font-size: 0.85rem;
+}
+
+.converter__result {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.85rem 1rem;
+  border-radius: 0.6rem;
+  background-color: var(--navy);
+  border: 1px solid var(--navy-line);
+}
+
+.converter__result-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.converter__result-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--mint);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.converter__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.converter__meta,
+.settings__hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.converter__meta + .converter__meta {
+  margin-top: 0.2rem;
+}
+
+.settings {
+  display: grid;
+  gap: 1rem;
+}
+
+.settings__hint {
+  color: var(--warn);
+}
+
+.settings__about {
+  border-top: 1px solid var(--navy-line);
+  padding-top: 0.75rem;
+}
+
+.settings__about summary {
+  cursor: pointer;
+  color: var(--cream);
+  font-weight: 600;
+}
+
+.settings__about-content {
+  margin-top: 0.6rem;
+  display: grid;
+  gap: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.settings__about-content p {
+  margin: 0;
+}
+
+.settings__about-content code {
+  color: var(--cream);
+}
+
+.status {
+  border-radius: 0.5rem;
+  border: 1px solid var(--navy-line);
+  padding: 0.5rem 0.7rem;
+  display: grid;
+  gap: 0.15rem;
+  font-size: 0.82rem;
+}
+
+.status__label {
+  font-weight: 600;
+}
+
+.status__detail {
+  color: var(--text-muted);
+}
+
+.status__error {
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.status--ok {
+  border-color: var(--mint);
+}
+
+.status--ok .status__label {
+  color: var(--mint);
+}
+
+.status--warn {
+  border-color: var(--warn);
+}
+
+.status--warn .status__label {
+  color: var(--warn);
+}
+
+.status--error {
+  border-color: var(--danger);
+}
+
+.status--error .status__label {
+  color: var(--danger);
+}
+
+.status--info .status__label {
+  color: var(--cream);
+}
+
+@media (max-width: 30rem) {
+  .pair {
+    grid-template-columns: 1fr;
+  }
+
+  .swap {
+    justify-self: center;
+    width: 100%;
+  }
+}

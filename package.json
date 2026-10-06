@@ -1,0 +1,35 @@
+{
+  "name": "price-converter",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "assets:ocr": "node scripts/copy-ocr-assets.mjs",
+    "icons": "node scripts/generate-icons.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "dependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tesseract.js": "7.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@tesseract.js-data/eng": "1.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "tesseract.js-core": "7.0.0",
+    "typescript": "^7.0.2",
+    "vite": "8.3.3",
+    "vite-plugin-pwa": "2.0.0"
+  }
+}
